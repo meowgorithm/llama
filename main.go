@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/caarlos0/env"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -26,6 +27,12 @@ var (
 	cursor    = lipgloss.NewStyle().Background(lipgloss.Color("#825DF2")).Foreground(lipgloss.Color("#FFFFFF"))
 	bar       = lipgloss.NewStyle().Background(lipgloss.Color("#5C5C5C")).Foreground(lipgloss.Color("#FFFFFF"))
 )
+
+type config struct {
+	VimMode     bool   `env:"LLAMA_VIM_KEYBINDINGS" envDefault:"true"`
+	LlamaEditor string `env:"LLAMA_EDITOR"`
+	Editor      string `env:"EDITOR" envDefault:"less"`
+}
 
 type keymap struct {
 	ForceQuit key.Binding
@@ -75,20 +82,24 @@ func main() {
 	output := termenv.NewOutput(os.Stderr)
 	lipgloss.SetColorProfile(output.ColorProfile())
 
+	var cfg config
+	if err := env.Parse(&cfg); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	if cfg.LlamaEditor != "" {
+		cfg.Editor = cfg.LlamaEditor
+	}
+
 	path, err := os.Getwd()
 	if err != nil {
 		panic(err)
 	}
 
-	vimMode := true
-	if lookup([]string{"LLAMA_VIM_KEYBINDINGS"}, "") == "false" {
-		vimMode = false
-	}
-
 	if len(os.Args) == 2 {
 		// Show usage on --help or -h.
 		if os.Args[1] == "--help" || os.Args[1] == "-h" {
-			usage(vimMode)
+			usage(cfg.VimMode)
 		}
 
 		// Maybe it is and argument, so get absolute path.
@@ -99,7 +110,7 @@ func main() {
 	}
 
 	keys := defaultKeymap
-	if !vimMode {
+	if !cfg.VimMode {
 		keys.VimUp.SetEnabled(false)
 		keys.VimDown.SetEnabled(false)
 		keys.VimLeft.SetEnabled(false)
@@ -108,7 +119,8 @@ func main() {
 	}
 
 	m := &model{
-		vimMode:   vimMode,
+		vimMode:   cfg.VimMode,
+		editor:    cfg.Editor,
 		keys:      keys,
 		path:      path,
 		width:     80,
@@ -118,7 +130,7 @@ func main() {
 	m.list()
 	m.status()
 
-	if vimMode {
+	if cfg.VimMode {
 		// Initialize search mode keybindings.
 		m.disableSearchMode()
 	}
@@ -156,6 +168,7 @@ func usage(vimMode bool) {
 
 type model struct {
 	vimMode        bool                      // Whether or not we're using Vim keybindings.
+	editor         string                    // The application to use when opening files.
 	keys           keymap                    // Keybindings.
 	path           string                    // Current dir path we are looking at.
 	files          []fs.DirEntry             // Files we are looking at.
@@ -590,7 +603,7 @@ func (m *model) cursorFileName() string {
 }
 
 func (m model) openEditor() tea.Cmd {
-	execCmd := exec.Command(lookup([]string{"LLAMA_EDITOR", "EDITOR"}, "less"), filepath.Join(m.path, m.cursorFileName()))
+	execCmd := exec.Command(m.editor, filepath.Join(m.path, m.cursorFileName()))
 	return tea.ExecProcess(execCmd, func(err error) tea.Msg {
 		// Note: we could return a message here indicating that editing is
 		// finished and altering our application about any errors. For now,
@@ -618,14 +631,4 @@ func subPath(path string, fullPath string) bool {
 		}
 	}
 	return true
-}
-
-func lookup(names []string, val string) string {
-	for _, name := range names {
-		val, ok := os.LookupEnv(name)
-		if ok && val != "" {
-			return val
-		}
-	}
-	return val
 }
